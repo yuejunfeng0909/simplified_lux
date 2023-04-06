@@ -194,10 +194,10 @@ class GridWorldEnv(MultiAgentEnv):
             frame[x][y] = 5
         
         self.history_observation.append(frame)
-        self.scores_history['team_0'].append(self.reward['team_0'])
-        self.scores_history['team_1'].append(self.reward['team_1'])
-        # self.scores_history['team_0'].append(self.info['scores']['team_0'])
-        # self.scores_history['team_1'].append(self.info['scores']['team_1'])
+        # self.scores_history['team_0'].append(self.reward['team_0'])
+        # self.scores_history['team_1'].append(self.reward['team_1'])
+        self.scores_history['team_0'].append(self.info['scores']['team_0'])
+        self.scores_history['team_1'].append(self.info['scores']['team_1'])
     
     def render(self, framerate=2):
         '''render observation recorded in history'''
@@ -388,9 +388,18 @@ class GridWorldEnv(MultiAgentEnv):
         
         if truncateds['__all__']:
             if self.info['scores']['team_0'] > self.info['scores']['team_1']:
-                reward[team] += REWARD_SUCCESS
-            if self.info['scores']['team_0'] < self.info['scores']['team_1']:
-                reward[team] += REWARD_SUCCESS
+                reward['team_0'] += REWARD_SUCCESS
+            elif self.info['scores']['team_0'] < self.info['scores']['team_1']:
+                reward['team_1'] += REWARD_SUCCESS
+            # else:
+            #     # tie, compare who have more ore
+            #     ore_team_0 = np.sum(self.robot_ores['team_0'])
+            #     ore_team_1 = np.sum(self.robot_ores['team_1'])
+            #     if ore_team_0 > ore_team_1:
+            #         reward['team_0'] += REWARD_SUCCESS * 0.5
+            #     elif ore_team_0 < ore_team_1:
+            #         reward['team_1'] += REWARD_SUCCESS * 0.5
+            
         
         new_obs = self._get_observation()
         return new_obs, reward, terminateds, truncateds, {}
