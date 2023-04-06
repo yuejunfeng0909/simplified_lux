@@ -67,12 +67,12 @@ class GridWorldEnv(MultiAgentEnv):
                 'ore_positions': self.ores_position,
             },
             'friendly': {
-                'factory_position': self.factory_positions[agent_id],
+                'factory_position': np.array([self.factory_positions[agent_id],]),
                 'robot_positions': self.robot_positions[agent_id],
                 'robot_ore': self.robot_ores[agent_id],
             },
             'opponent': {
-                'factory_position': self.factory_positions[opponent_id],
+                'factory_position': np.array([self.factory_positions[opponent_id],]),
                 'robot_positions': self.robot_positions[opponent_id],
                 'robot_ore': self.robot_ores[opponent_id],
             }
@@ -93,8 +93,8 @@ class GridWorldEnv(MultiAgentEnv):
         random_positions = np.random.choice(100, 7, replace=False)
         self.ores_position = random_positions[:5]
         self.factory_positions = {
-            "team_0": np.array([random_positions[5],]),
-            "team_1": np.array([random_positions[6],]),
+            "team_0": random_positions[5],
+            "team_1": random_positions[6],
         }
         
         # initialize positions of robots, 3 per team, 0-99
@@ -103,7 +103,7 @@ class GridWorldEnv(MultiAgentEnv):
         
         for team in self.agents:
             # get factory position
-            factory_position = self.factory_positions[team][0]
+            factory_position = self.factory_positions[team]
             
             # put the agent anywhere on the 8 positions around the factory
             factory_x, factory_y = self._convert_position_to_xy(factory_position)
@@ -135,7 +135,10 @@ class GridWorldEnv(MultiAgentEnv):
         
         # for recording game history
         self.history_observation = []
-        self.scores_history = []
+        self.scores_history = {
+            'team_0': [],
+            'team_1': []
+        }
         
         
         # accumulated reward design
@@ -143,7 +146,7 @@ class GridWorldEnv(MultiAgentEnv):
         
         self.info = {
             'scores': {'team_0': 0, 'team_1': 0},
-            'time_left': 100
+            'time_left': GAME_TURNS
         }
         return initial_observation, {}
     
@@ -191,7 +194,10 @@ class GridWorldEnv(MultiAgentEnv):
             frame[x][y] = 5
         
         self.history_observation.append(frame)
-        self.scores_history.append(self.info['scores'])
+        self.scores_history['team_0'].append(self.reward['team_0'])
+        self.scores_history['team_1'].append(self.reward['team_1'])
+        # self.scores_history['team_0'].append(self.info['scores']['team_0'])
+        # self.scores_history['team_1'].append(self.info['scores']['team_1'])
     
     def render(self, framerate=2):
         '''render observation recorded in history'''
@@ -204,7 +210,12 @@ class GridWorldEnv(MultiAgentEnv):
         fig_2_score = fig.add_subplot(244)
         
         def render_frame(i):
+            fig_grid.clear()
+            fig_1_score.clear()
+            fig_2_score.clear()
             fig_grid.matshow(self.history_observation[i], cmap=cmap)
+            fig_1_score.plot(self.scores_history['team_0'][max(0, i-20):i+1])
+            fig_2_score.plot(self.scores_history['team_1'][max(0, i-20):i+1])
         
         self.anim = matplotlib.animation.FuncAnimation(
             fig, render_frame, frames=n_frames, interval=1000/framerate

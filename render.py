@@ -11,11 +11,6 @@ assert simulation_time > 1
 
 for _ in range(simulation_time-1):
     
-    example_action = {
-        'team_0': [0, 1, 2],
-        'team_1': [3, 6, 1]
-    }
-    
     random_sample_action = {
         'team_0': env.action_space.sample(),
         'team_1': env.action_space.sample(),
