@@ -1,6 +1,5 @@
 import numpy as np
-import gym
-from gym import spaces
+from gymnasium import spaces
 from ray.rllib.env import MultiAgentEnv
 import copy
 
@@ -25,19 +24,23 @@ class GridWorldEnv(MultiAgentEnv):
 
         
     def __init__(self, config=None):
-        self.agents = ['player_1', 'player_2']
+        super().__init__()
+        self.agents = ['player_1_0', 'player_1_1', 'player_1_2',
+                       'player_2_0', 'player_2_1', 'player_2_2']
         
-        # observation space        
+        # observation space
         # two factory positions, six robot positions
-        player_1_factory_position = spaces.MultiDiscrete([10, 10])
-        player_2_factory_position = spaces.MultiDiscrete([10, 10])
+        # assume player 1 is friendly
+        friendly_factory_position = spaces.MultiDiscrete([10, 10])
+        opponent_factory_position = spaces.MultiDiscrete([10, 10])
 
-        player_1_robot_positions = spaces.MultiDiscrete([101, 101, 101]) # (100) for dead robots
-        player_2_robot_positions = spaces.MultiDiscrete([101, 101, 101])
+        robot_position = spaces.Discrete(101)
+        friendly_robot_positions = spaces.MultiDiscrete([101, 101]) # (100) for dead robots
+        opponent_robot_positions = spaces.MultiDiscrete([101, 101, 101])
         
-        
-        player_1_robot_ore = spaces.MultiDiscrete([ROBOT_MAX_ORE_CAPACITY, ROBOT_MAX_ORE_CAPACITY, ROBOT_MAX_ORE_CAPACITY])
-        player_2_robot_ore = spaces.MultiDiscrete([ROBOT_MAX_ORE_CAPACITY, ROBOT_MAX_ORE_CAPACITY, ROBOT_MAX_ORE_CAPACITY])
+        robot_ore = spaces.Discrete(ROBOT_MAX_ORE_CAPACITY)
+        friendly_robot_ore = spaces.MultiDiscrete([ROBOT_MAX_ORE_CAPACITY, ROBOT_MAX_ORE_CAPACITY, ])
+        opponent_robot_ore = spaces.MultiDiscrete([ROBOT_MAX_ORE_CAPACITY, ROBOT_MAX_ORE_CAPACITY, ROBOT_MAX_ORE_CAPACITY, ])
 
         # common observations
         NUM_OF_ORES = 5
@@ -47,28 +50,37 @@ class GridWorldEnv(MultiAgentEnv):
             'common': spaces.Dict({
                 'ore_positions': ore_positions,
             }),
-            'player_1': spaces.Dict({
-                'factory_position': player_1_factory_position,
-                'robot_positions': player_1_robot_positions,
-                'robot_ore': player_1_robot_ore
+            'robot_state': spaces.Dict({
+                'robot_position': robot_position,
+                'robot_ore': robot_ore
             }),
-            'player_2': spaces.Dict({
-                'factory_position': player_2_factory_position,
-                'robot_positions': player_2_robot_positions,
-                'robot_ore': player_2_robot_ore
+            'friendly': spaces.Dict({
+                'factory_position': friendly_factory_position,
+                'robot_positions': friendly_robot_positions,
+                'robot_ore': friendly_robot_ore
+            }),
+            'opponent': spaces.Dict({
+                'factory_position': opponent_factory_position,
+                'robot_positions': opponent_robot_positions,
+                'robot_ore': opponent_robot_ore
             })
         })
         
         # action space
-        self.action_space = spaces.MultiDiscrete(1+  # 0:     stay still
-                                                 1+  # 1:     mine
-                                                 4+  # 2-5:   move in 4 directions
-                                                 4   # 6-9:   pass resource in 4 directions
-                                                 )
+        self.action_space = spaces.Discrete(1+  # 0:     stay still
+                                            1+  # 1:     mine
+                                            4+  # 2-5:   move in 4 directions
+                                            4   # 6-9:   pass resource in 4 directions
+                                            )
         
         # TODO for now, factory automatically convert ore to score
 
-    def reset(self):
+    def _get_multiagent_observation(self, agent_id: str):
+        if agent_id.startswith('player_1'):
+            return self._get_observation(agent_id, 'friendly', 'opponent')
+            
+
+    def reset(self, *, seed=None, options=None):
         # initialization
         def check_initial_state_validity(initial_state):
             # check factory positions are not the same
@@ -78,7 +90,7 @@ class GridWorldEnv(MultiAgentEnv):
             
             # check duplicate robot positions
             positions = []
-            for agent in self.agents:
+            for agent in ['player_1', 'player_2']:
                 for robot in initial_state[agent]['robot_positions']:
                     positions.append(robot)
             if len(positions) != len(set(positions)):
@@ -103,25 +115,19 @@ class GridWorldEnv(MultiAgentEnv):
         
         
         # accumulated reward design
-        self.reward = {
-            'player_1': {
-                0: 0,
-                1: 0,
-                2: 0
-            },
-            'player_2': {
-                0: 0,
-                1: 0,
-                2: 0
-            }
+        self.reward={'player_1_0': 0,
+                     'player_1_1': 0,
+                     'player_1_2': 0,
+                     'player_2_0': 0,
+                     'player_2_1': 0,
+                     'player_2_2': 0,
         }
         
         self.info = {
             'scores': {'player_1': 0, 'player_2': 0},
             'time_left': 100
         }
-        
-        return initial_observation
+        return initial_observation, {}
     
     def _sample_observation(self):
         '''
@@ -247,7 +253,7 @@ class GridWorldEnv(MultiAgentEnv):
         new_position = x * 10 + y
         
         # check if new position is occupied by other robots
-        for other_agent in self.agents:
+        for other_agent in ['player_1', 'player_2']:
             if new_position in intermediate_state[other_agent]['robot_positions']:
                 return REWARD_INVALID_ACTION
         
@@ -306,20 +312,34 @@ class GridWorldEnv(MultiAgentEnv):
         return transfer_result_reward
         
     
-    def step(self, action: dict):
+    def step(self, actions: dict):
         """
         Returns (next observation, rewards, dones, infos) after having taken the given actions.
         
         e.g.
-        action={'player_1':
-                    {0: 0, 1: 0, 2: 0},
-                'player_2':
-                    {0: 0, 1: 0, 2: 0}
-                }
+        action={'player_1_0': 0,
+                'player_1_1': 0,
+                'player_1_2': 0,
+                'player_2_0': 0,
+                'player_2_1': 0,
+                'player_2_2': 0}
         """
+        
+        # convert robot action to player action:
+        action={'player_1':
+                    {0: actions['player_1_0'], 
+                     1: actions['player_1_1'], 
+                     2: actions['player_1_2']},
+                'player_2':
+                    {0: actions['player_2_0'], 
+                     1: actions['player_2_1'], 
+                     2: actions['player_2_2']}
+                }
+        
+        
         # check game is done
         self.time_left -= 1
-        is_done = {
+        truncateds = {
             '__all__': self.time_left <= 0,
         }
         
@@ -327,14 +347,15 @@ class GridWorldEnv(MultiAgentEnv):
         reward = copy.deepcopy(self.reward)
         
         # move agents
-        for agent in self.agents:
+        for agent in ['player_1', 'player_2']:
             for robot_id, robot_action in action[agent].items():
+                agent_name = f"{agent}_{robot_id}"
                 # check if robot is dead
                 if intermediate_state[agent]['robot_positions'][robot_id] == 100:
                     continue
                 
                 # reward per turn
-                reward[agent][robot_id] += REWARD_PER_TURN
+                reward[agent_name] += REWARD_PER_TURN
                 
                 # stay still
                 if robot_action == 0:
@@ -343,26 +364,30 @@ class GridWorldEnv(MultiAgentEnv):
                 # mine
                 if robot_action == 1:
                     if self._robot_on_ore(intermediate_state, agent, robot_id):
-                        reward[agent][robot_id] = self._robot_add_ore(intermediate_state, agent, robot_id, ROBOT_ORE_PER_TURN)
+                        reward[agent_name] = self._robot_add_ore(intermediate_state, agent, robot_id, ROBOT_ORE_PER_TURN)
                     else:
                         # robot is not on ore
-                        reward[agent][robot_id] += REWARD_INVALID_ACTION
+                        reward[agent_name] += REWARD_INVALID_ACTION
                 
                 # move
                 if 2 <= robot_action <=5:
-                    reward[agent][robot_id] = self._robot_move(intermediate_state, agent, robot_id, robot_action)
+                    reward[agent_name] = self._robot_move(intermediate_state, agent, robot_id, robot_action)
                         
                 # pass resource
                 if 6 <= robot_action <= 9:
-                    reward[agent][robot_id] = self._robot_pass_resource(intermediate_state, agent, robot_id, robot_action)
+                    reward[agent_name] = self._robot_pass_resource(intermediate_state, agent, robot_id, robot_action)
         
         
-        if is_done['__all__']:
+        if truncateds['__all__']:
             if self.info['scores']['player_1'] > self.info['scores']['player_2']:
-                reward['player_1'] += REWARD_SUCCESS
+                for robot_id in range(3):
+                    agent_name = f"player_1_{robot_id}"
+                    reward[agent_name] += REWARD_SUCCESS
             if self.info['scores']['player_1'] < self.info['scores']['player_2']:
-                reward['player_2'] += REWARD_SUCCESS
+                for robot_id in range(3):
+                    agent_name = f"player_2_{robot_id}"
+                    reward[agent_name] += REWARD_SUCCESS
         
         self.reward = reward
         self.current_state = intermediate_state
-        return self.current_state, self.reward, is_done, {}
+        return self.current_state, self.reward, terminateds, truncateds, {}
