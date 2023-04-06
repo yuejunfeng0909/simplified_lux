@@ -13,7 +13,7 @@ import matplotlib.animation
 from matplotlib.colors import ListedColormap
 
 # ground, ore, player 1 factory, player 1 robot, player 2 factory, player 2 robot
-cmap = ListedColormap(['#FFFFFF',   # ground
+cmap = ListedColormap(['#ffffff',   # ground
                        '#4d2600',   # ore
                        '#0000ff',   # player 1 factory
                        '#3399ff',   # player 1 robot
@@ -25,89 +25,113 @@ class GridWorldEnv(MultiAgentEnv):
         
     def __init__(self, config=None):
         super().__init__()
-        self.agents = ['player_1_0', 'player_1_1', 'player_1_2',
-                       'player_2_0', 'player_2_1', 'player_2_2']
+        self.agents = ['team_0', 'team_1']
         
         # observation space
-        # two factory positions, six robot positions
-        # assume player 1 is friendly
-        friendly_factory_position = spaces.MultiDiscrete([10, 10])
-        opponent_factory_position = spaces.MultiDiscrete([10, 10])
-
-        robot_position = spaces.Discrete(101)
-        friendly_robot_positions = spaces.MultiDiscrete([101, 101]) # (100) for dead robots
-        opponent_robot_positions = spaces.MultiDiscrete([101, 101, 101])
-        
-        robot_ore = spaces.Discrete(ROBOT_MAX_ORE_CAPACITY)
-        friendly_robot_ore = spaces.MultiDiscrete([ROBOT_MAX_ORE_CAPACITY, ROBOT_MAX_ORE_CAPACITY, ])
-        opponent_robot_ore = spaces.MultiDiscrete([ROBOT_MAX_ORE_CAPACITY, ROBOT_MAX_ORE_CAPACITY, ROBOT_MAX_ORE_CAPACITY, ])
-
-        # common observations
         NUM_OF_ORES = 5
-        ore_positions = spaces.MultiDiscrete([100,]*NUM_OF_ORES)
-
         self.observation_space = spaces.Dict({
             'common': spaces.Dict({
-                'ore_positions': ore_positions,
-            }),
-            'robot_state': spaces.Dict({
-                'robot_position': robot_position,
-                'robot_ore': robot_ore
+                'ore_positions': spaces.MultiDiscrete([100,]*NUM_OF_ORES, dtype=np.int64),
             }),
             'friendly': spaces.Dict({
-                'factory_position': friendly_factory_position,
-                'robot_positions': friendly_robot_positions,
-                'robot_ore': friendly_robot_ore
+                'factory_position': spaces.MultiDiscrete([100]),
+                'robot_positions': spaces.MultiDiscrete([101, 101, 101]),
+                'robot_ore': spaces.MultiDiscrete([ROBOT_MAX_ORE_CAPACITY + 1, 
+                                                   ROBOT_MAX_ORE_CAPACITY + 1, 
+                                                   ROBOT_MAX_ORE_CAPACITY + 1, ]),
             }),
             'opponent': spaces.Dict({
-                'factory_position': opponent_factory_position,
-                'robot_positions': opponent_robot_positions,
-                'robot_ore': opponent_robot_ore
+                'factory_position': spaces.MultiDiscrete([100]),
+                'robot_positions': spaces.MultiDiscrete([101, 101, 101]),
+                'robot_ore': spaces.MultiDiscrete([ROBOT_MAX_ORE_CAPACITY + 1, 
+                                                   ROBOT_MAX_ORE_CAPACITY + 1, 
+                                                   ROBOT_MAX_ORE_CAPACITY + 1, ]),
             })
         })
         
         # action space
-        self.action_space = spaces.Discrete(1+  # 0:     stay still
-                                            1+  # 1:     mine
-                                            4+  # 2-5:   move in 4 directions
-                                            4   # 6-9:   pass resource in 4 directions
-                                            )
+        num_of_actions = 1+1+4+4
+        # 0: stay still
+        # 1: mine
+        # 2-5: move in 4 directions
+        # 6-9: pass resource in 4 directions
+
+        self.action_space = spaces.MultiDiscrete([num_of_actions, num_of_actions, num_of_actions])
         
         # TODO for now, factory automatically convert ore to score
 
-    def _get_multiagent_observation(self, agent_id: str):
-        if agent_id.startswith('player_1'):
-            return self._get_observation(agent_id, 'friendly', 'opponent')
+    def _get_observations_for_agent(self, agent_id):
+        opponent_id = 'team_0' if agent_id == 'team_1' else 'team_1'
+        state = {
+            'common': {
+                'ore_positions': self.ores_position,
+            },
+            'friendly': {
+                'factory_position': self.factory_positions[agent_id],
+                'robot_positions': self.robot_positions[agent_id],
+                'robot_ore': self.robot_ores[agent_id],
+            },
+            'opponent': {
+                'factory_position': self.factory_positions[opponent_id],
+                'robot_positions': self.robot_positions[opponent_id],
+                'robot_ore': self.robot_ores[opponent_id],
+            }
+        }
+        return state
+
+    def _get_observation(self):
+        observation = {
+            'team_0': self._get_observations_for_agent('team_0'),
+            'team_1': self._get_observations_for_agent('team_1'),
+        }
+        return observation
+    
+    def _randomize_state(self):
+        # initialize ores
+        # randomly choose 5 positions, 0-99
+        # initialize factory positions, cannot be on ores
+        random_positions = np.random.choice(100, 7, replace=False)
+        self.ores_position = random_positions[:5]
+        self.factory_positions = {
+            "team_0": np.array([random_positions[5],]),
+            "team_1": np.array([random_positions[6],]),
+        }
+        
+        # initialize positions of robots, 3 per team, 0-99
+        self.robot_positions = {}
+        # example: {'team_0': [1, 2, 3], 'team_1': [4, 5, 6]}
+        
+        for team in self.agents:
+            # get factory position
+            factory_position = self.factory_positions[team][0]
             
+            # put the agent anywhere on the 8 positions around the factory
+            factory_x, factory_y = self._convert_position_to_xy(factory_position)
+            positions_around_factory = []
+            for x in range(factory_x-1, factory_x+2):
+                for y in range(factory_y-1, factory_y+2):
+                    # check if the position is valid
+                    if x < 0 or x >= 10 or y < 0 or y >= 10:
+                        continue
+                    # cannot be on factory
+                    if x == factory_x and y == factory_y:
+                        continue
+                    positions_around_factory.append(x*10+y)
+            
+            # randomly choose 3 positions
+            random_positions = np.random.choice(positions_around_factory, 3, replace=False)
+            self.robot_positions[team] = random_positions
+        
+        # initialize robots with zero ore
+        self.robot_ores = {
+            "team_0": np.array([0, 0, 0]),
+            "team_1": np.array([0, 0, 0])
+        }
 
     def reset(self, *, seed=None, options=None):
-        # initialization
-        def check_initial_state_validity(initial_state):
-            # check factory positions are not the same
-            # use .all() to compare two numpy arrays
-            if (initial_state['player_1']['factory_position'] == initial_state['player_2']['factory_position']).all():
-                return False
-            
-            # check duplicate robot positions
-            positions = []
-            for agent in ['player_1', 'player_2']:
-                for robot in initial_state[agent]['robot_positions']:
-                    positions.append(robot)
-            if len(positions) != len(set(positions)):
-                return False
-            
-            return True
-        
-        # sample observation space
-        while True:
-            initial_observation = self.observation_space.sample()
-            # set robot ore to 0
-            initial_observation['player_1']['robot_ore'] = [0, 0, 0]
-            initial_observation['player_2']['robot_ore'] = [0, 0, 0]
-            if check_initial_state_validity(initial_observation):
-                break
-        
-        self.current_state = initial_observation
+        # initialization of internal state
+        self._randomize_state()
+        initial_observation = self._get_observation()
         
         # for recording game history
         self.history_observation = []
@@ -115,16 +139,10 @@ class GridWorldEnv(MultiAgentEnv):
         
         
         # accumulated reward design
-        self.reward={'player_1_0': 0,
-                     'player_1_1': 0,
-                     'player_1_2': 0,
-                     'player_2_0': 0,
-                     'player_2_1': 0,
-                     'player_2_2': 0,
-        }
+        self.reward={'team_0': 0, 'team_1': 0}
         
         self.info = {
-            'scores': {'player_1': 0, 'player_2': 0},
+            'scores': {'team_0': 0, 'team_1': 0},
             'time_left': 100
         }
         return initial_observation, {}
@@ -133,7 +151,8 @@ class GridWorldEnv(MultiAgentEnv):
         '''
         for testing render function
         '''
-        observation = self.observation_space.sample()
+        self._randomize_state()
+        observation = self._get_observation()
         
         return observation
     
@@ -141,34 +160,31 @@ class GridWorldEnv(MultiAgentEnv):
         '''convert 0-99 position to (x, y)'''
         return (robot_position // 10, robot_position % 10)
         
-    def record(self, new_obs=None):
-        if new_obs is None:
-            new_obs = self.current_state
-        
+    def record(self):
         '''record the observation for rendering'''
-        frame = np.zeros((10, 10))
+        frame = np.zeros((10, 10), dtype=np.int32)
         
         # ore positions
-        ores = new_obs['common']['ore_positions']
+        ores = self.ores_position
         for pos in ores:
             x, y = self._convert_position_to_xy(pos)
             frame[x][y] = 1
         
-        # player 1
-        x, y = new_obs['player_1']['factory_position']
+        # team_0
+        x, y = self._convert_position_to_xy(self.factory_positions['team_0'])
         frame[x][y] = 2
         
-        for pos in new_obs['player_1']['robot_positions']:
+        for pos in self.robot_positions['team_0']:
             if pos == 100:
                 continue
             x, y = self._convert_position_to_xy(pos)
             frame[x][y] = 3
         
-        # player 2
-        x, y= new_obs['player_2']['factory_position']
+        # team_1
+        x, y= self._convert_position_to_xy(self.factory_positions['team_1'])
         frame[x][y] = 4
         
-        for pos in new_obs['player_2']['robot_positions']:
+        for pos in self.robot_positions['team_1']:
             if pos == 100:
                 continue
             x, y = self._convert_position_to_xy(pos)
@@ -195,44 +211,36 @@ class GridWorldEnv(MultiAgentEnv):
         )
         fig.show()
     
-    def get_observation(self, agent_id):
-        '''not using this function for now'''
-        if agent_id == 'player_1':
-            other_agent_id = 'player_2'
-            # observation = 
-        else:
-            other_agent_id = 'player_1'
-    
-    def _robot_on_ore(self, intermediate_state, agent_id, robot_id):
+    def _robot_on_ore(self, agent_id, robot_id):
         '''check if robot is on ore'''
-        robot_pos = intermediate_state[agent_id]['robot_positions'][robot_id]
-        if robot_pos in intermediate_state['common']['ore_positions']:
+        robot_pos = self.robot_positions[agent_id][robot_id]
+        if robot_pos in self.ores_position:
             return True
         else:
             return False
     
-    def _robot_add_ore(self, intermediate_state, agent_id, robot_id, amount):
+    def _robot_add_ore(self, agent_id, robot_id, amount):
         '''
         add ore to robot if it is on ore
         '''
         # check if already full capacity
-        if intermediate_state[agent_id]['robot_ore'][robot_id] == ROBOT_MAX_ORE_CAPACITY:
-            return -amount
+        if self.robot_ores[agent_id][robot_id] == ROBOT_MAX_ORE_CAPACITY:
+            return -amount * REWARD_PER_RESOURCE_WASTED
         
         # add ore
-        intermediate_state[agent_id]['robot_ore'][robot_id] += amount
+        self.robot_ores[agent_id][robot_id] += amount
         
         # check ore capacity
-        if intermediate_state[agent_id]['robot_ore'][robot_id] > ROBOT_MAX_ORE_CAPACITY:
-            intermediate_state[agent_id]['robot_ore'][robot_id] = ROBOT_MAX_ORE_CAPACITY
-        return (amount - intermediate_state[agent_id]['robot_ore'][robot_id]) * REWARD_PER_RESOURCE_TRANSFERRED
+        if self.robot_ores[agent_id][robot_id] > ROBOT_MAX_ORE_CAPACITY:
+            self.robot_ores[agent_id][robot_id] = ROBOT_MAX_ORE_CAPACITY
+        return (amount - self.robot_ores[agent_id][robot_id]) * REWARD_PER_RESOURCE_TRANSFERRED
     
-    def _robot_move(self, intermediate_state, agent_id, robot_id, robot_action):
+    def _robot_move(self, agent_id, robot_id, robot_action):
         '''
         move robot to new position
         '''
         # get robot position
-        robot_position = intermediate_state[agent_id]['robot_positions'][robot_id]
+        robot_position = self.robot_positions[agent_id][robot_id]
         
         # get new position
         x, y = self._convert_position_to_xy(robot_position)
@@ -253,26 +261,27 @@ class GridWorldEnv(MultiAgentEnv):
         new_position = x * 10 + y
         
         # check if new position is occupied by other robots
-        for other_agent in ['player_1', 'player_2']:
-            if new_position in intermediate_state[other_agent]['robot_positions']:
-                return REWARD_INVALID_ACTION
+        for team in self.robot_positions:
+            for pos in self.robot_positions[team]:
+                if pos == new_position:
+                    return REWARD_INVALID_ACTION
         
         # update robot position
-        intermediate_state[agent_id]['robot_positions'][robot_id] = new_position
+        self.robot_positions[agent_id][robot_id] = new_position
         return 0
     
-    def _robot_pass_resource(self, intermediate_state, agent_id, robot_id, robot_action):
+    def _robot_pass_resource(self, agent_id, robot_id, robot_action):
         '''
         pass resource to other robots
         
         Return:
         '''
         # if no resources to pass
-        if intermediate_state[agent_id]['robot_ore'][robot_id] == 0:
+        if self.robot_ores[agent_id][robot_id] == 0:
             return REWARD_INVALID_ACTION
         
         # get new position
-        x, y = self._convert_position_to_xy(intermediate_state[agent_id]['robot_positions'][robot_id])
+        x, y = self._convert_position_to_xy(self.robot_positions[agent_id][robot_id])
         if robot_action == 2:
             y += 1
         elif robot_action == 3:
@@ -288,106 +297,89 @@ class GridWorldEnv(MultiAgentEnv):
         
         # check if new position is occupied by friendly robots or factory
         new_position = x * 10 + y
-        factory_x, factory_y = intermediate_state[agent_id]['factory_position']
-        if new_position not in intermediate_state[agent_id]['robot_positions'] and \
+        factory_x, factory_y = self._convert_position_to_xy(self.factory_positions[agent_id])
+        if new_position not in self.robot_positions[agent_id] and\
             new_position != factory_x * 10 + factory_y:
             return REWARD_INVALID_ACTION
     
-        transferred_resource = intermediate_state[agent_id]['robot_ore'][robot_id]
-        intermediate_state[agent_id]['robot_ore'][robot_id] = 0
+        transferred_resource = self.robot_ores[agent_id][robot_id]
+        self.robot_ores[agent_id][robot_id] = 0
         
         # pass resource to factory
         if new_position == factory_x * 10 + factory_y:
             
             # convert resource to score
-            self.info['scores'][agent_id][robot_id] += transferred_resource
+            self.info['scores'][agent_id] += transferred_resource
             
             # return reward
             return transferred_resource * REWARD_PER_RESOURCE_TRANSFERRED
         
         # pass to robots
-        target_robot = np.where(intermediate_state[agent_id]['robot_positions'] == new_position)
-        target_robot = target_robot[0][0]
-        transfer_result_reward = self._robot_add_ore(intermediate_state, agent_id, target_robot, transferred_resource)
-        return transfer_result_reward
-        
+        target_robot = np.where(self.robot_positions[agent_id] == new_position)[0][0]
+        transfer_result_reward = self._robot_add_ore(agent_id, target_robot, transferred_resource)
+        return transfer_result_reward   
     
     def step(self, actions: dict):
         """
         Returns (next observation, rewards, dones, infos) after having taken the given actions.
         
         e.g.
-        action={'player_1_0': 0,
-                'player_1_1': 0,
-                'player_1_2': 0,
-                'player_2_0': 0,
-                'player_2_1': 0,
-                'player_2_2': 0}
+        action={
+            'team_0': [0, 1, 2]
+            'team_1': [2, 1, 5]
+        }
         """
         
         # convert robot action to player action:
-        action={'player_1':
-                    {0: actions['player_1_0'], 
-                     1: actions['player_1_1'], 
-                     2: actions['player_1_2']},
-                'player_2':
-                    {0: actions['player_2_0'], 
-                     1: actions['player_2_1'], 
-                     2: actions['player_2_2']}
-                }
-        
         
         # check game is done
-        self.time_left -= 1
+        self.info['time_left'] -= 1
         truncateds = {
-            '__all__': self.time_left <= 0,
+            '__all__': self.info['time_left'] <= 0,
+        }
+        terminateds = {
+            '__all__': self.info['time_left'] <= 0,
         }
         
-        intermediate_state = copy.deepcopy(self.current_state)
-        reward = copy.deepcopy(self.reward)
+        reward = self.reward
         
         # move agents
-        for agent in ['player_1', 'player_2']:
-            for robot_id, robot_action in action[agent].items():
-                agent_name = f"{agent}_{robot_id}"
+        for team in actions:
+            for agent in range(3):
+                agent_action = actions[team][agent]
                 # check if robot is dead
-                if intermediate_state[agent]['robot_positions'][robot_id] == 100:
+                if self.robot_positions[team][agent] == 100:
                     continue
                 
                 # reward per turn
-                reward[agent_name] += REWARD_PER_TURN
+                reward[team] += REWARD_PER_TURN
                 
                 # stay still
-                if robot_action == 0:
+                if agent_action == 0:
                     pass
                 
                 # mine
-                if robot_action == 1:
-                    if self._robot_on_ore(intermediate_state, agent, robot_id):
-                        reward[agent_name] = self._robot_add_ore(intermediate_state, agent, robot_id, ROBOT_ORE_PER_TURN)
+                if agent_action == 1:
+                    if self._robot_on_ore(team, agent):
+                        reward[team] = self._robot_add_ore(team, agent, ROBOT_ORE_PER_TURN)
                     else:
                         # robot is not on ore
-                        reward[agent_name] += REWARD_INVALID_ACTION
+                        reward[team] += REWARD_INVALID_ACTION
                 
                 # move
-                if 2 <= robot_action <=5:
-                    reward[agent_name] = self._robot_move(intermediate_state, agent, robot_id, robot_action)
+                if 2 <= agent_action <=5:
+                    reward[team] = self._robot_move(team, agent, agent_action)
                         
                 # pass resource
-                if 6 <= robot_action <= 9:
-                    reward[agent_name] = self._robot_pass_resource(intermediate_state, agent, robot_id, robot_action)
+                if 6 <= agent_action <= 9:
+                    reward[team] = self._robot_pass_resource(team, agent, agent_action)
         
         
         if truncateds['__all__']:
-            if self.info['scores']['player_1'] > self.info['scores']['player_2']:
-                for robot_id in range(3):
-                    agent_name = f"player_1_{robot_id}"
-                    reward[agent_name] += REWARD_SUCCESS
-            if self.info['scores']['player_1'] < self.info['scores']['player_2']:
-                for robot_id in range(3):
-                    agent_name = f"player_2_{robot_id}"
-                    reward[agent_name] += REWARD_SUCCESS
+            if self.info['scores']['team_0'] > self.info['scores']['team_1']:
+                reward[team] += REWARD_SUCCESS
+            if self.info['scores']['team_0'] < self.info['scores']['team_1']:
+                reward[team] += REWARD_SUCCESS
         
-        self.reward = reward
-        self.current_state = intermediate_state
-        return self.current_state, self.reward, terminateds, truncateds, {}
+        new_obs = self._get_observation()
+        return new_obs, reward, terminateds, truncateds, {}
