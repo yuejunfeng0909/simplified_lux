@@ -25,23 +25,26 @@ class GridWorldEnv(MultiAgentEnv):
         
     def __init__(self, config=None):
         super().__init__()
-        self.agents = ['team_0', 'team_1']
+        self.agents = [f'team_{i}_robot_{j}' for i in range(2) for j in range(3)]
         
         # observation space
         NUM_OF_ORES = 5
         self.observation_space = spaces.Dict({
+            'private': spaces.Dict({
+                'robot_position': spaces.Discrete(100),
+                'robot_ore': spaces.Discrete(ROBOT_MAX_ORE_CAPACITY + 1),
+            }),
             'common': spaces.Dict({
                 'ore_positions': spaces.MultiDiscrete([100,]*NUM_OF_ORES, dtype=np.int64),
             }),
             'friendly': spaces.Dict({
-                'factory_position': spaces.MultiDiscrete([100]),
-                'robot_positions': spaces.MultiDiscrete([101, 101, 101]),
+                'factory_position': spaces.Discrete(100),
+                'robot_positions': spaces.MultiDiscrete([101, 101]),
                 'robot_ore': spaces.MultiDiscrete([ROBOT_MAX_ORE_CAPACITY + 1, 
-                                                   ROBOT_MAX_ORE_CAPACITY + 1, 
                                                    ROBOT_MAX_ORE_CAPACITY + 1, ]),
             }),
             'opponent': spaces.Dict({
-                'factory_position': spaces.MultiDiscrete([100]),
+                'factory_position': spaces.Discrete(100),
                 'robot_positions': spaces.MultiDiscrete([101, 101, 101]),
                 'robot_ore': spaces.MultiDiscrete([ROBOT_MAX_ORE_CAPACITY + 1, 
                                                    ROBOT_MAX_ORE_CAPACITY + 1, 
@@ -56,33 +59,40 @@ class GridWorldEnv(MultiAgentEnv):
         # 2-5: move in 4 directions
         # 6-9: pass resource in 4 directions
 
-        self.action_space = spaces.MultiDiscrete([num_of_actions, num_of_actions, num_of_actions])
+        self.action_space = spaces.Discrete(num_of_actions)
         
         # TODO for now, factory automatically convert ore to score
 
     def _get_observations_for_agent(self, agent_id):
-        opponent_id = 'team_0' if agent_id == 'team_1' else 'team_1'
+        agent_team = agent_id[:6]
+        opponent_team = 'team_0' if agent_id.startswith('team_1') else 'team_1'
+        agent_robot_id = int(agent_id[-1])
+        other_robot_ids = [i for i in range(3) if i != agent_robot_id]
+        
         state = {
+            'private': {
+                'robot_position': self.robot_positions[agent_team][agent_robot_id],
+                'robot_ore': self.robot_ores[agent_team][agent_robot_id],
+            },
             'common': {
                 'ore_positions': self.ores_position,
             },
             'friendly': {
-                'factory_position': np.array([self.factory_positions[agent_id],]),
-                'robot_positions': self.robot_positions[agent_id],
-                'robot_ore': self.robot_ores[agent_id],
+                'factory_position': self.factory_positions[agent_team],
+                'robot_positions': self.robot_positions[agent_team][other_robot_ids],
+                'robot_ore': self.robot_ores[agent_team][other_robot_ids],
             },
             'opponent': {
-                'factory_position': np.array([self.factory_positions[opponent_id],]),
-                'robot_positions': self.robot_positions[opponent_id],
-                'robot_ore': self.robot_ores[opponent_id],
+                'factory_position': self.factory_positions[opponent_team],
+                'robot_positions': self.robot_positions[opponent_team],
+                'robot_ore': self.robot_ores[opponent_team],
             }
         }
         return state
 
     def _get_observation(self):
         observation = {
-            'team_0': self._get_observations_for_agent('team_0'),
-            'team_1': self._get_observations_for_agent('team_1'),
+            agent_id: self._get_observations_for_agent(agent_id) for agent_id in self.agents
         }
         return observation
     
@@ -101,7 +111,7 @@ class GridWorldEnv(MultiAgentEnv):
         self.robot_positions = {}
         # example: {'team_0': [1, 2, 3], 'team_1': [4, 5, 6]}
         
-        for team in self.agents:
+        for team in ['team_0', 'team_1']:
             # get factory position
             factory_position = self.factory_positions[team]
             
@@ -140,9 +150,6 @@ class GridWorldEnv(MultiAgentEnv):
             'team_1': []
         }
         
-        
-        # accumulated reward design
-        self.reward={'team_0': 0, 'team_1': 0}
         
         self.info = {
             'scores': {'team_0': 0, 'team_1': 0},
@@ -194,8 +201,6 @@ class GridWorldEnv(MultiAgentEnv):
             frame[x][y] = 5
         
         self.history_observation.append(frame)
-        # self.scores_history['team_0'].append(self.reward['team_0'])
-        # self.scores_history['team_1'].append(self.reward['team_1'])
         self.scores_history['team_0'].append(self.info['scores']['team_0'])
         self.scores_history['team_1'].append(self.info['scores']['team_1'])
     
@@ -234,17 +239,17 @@ class GridWorldEnv(MultiAgentEnv):
         '''
         add ore to robot if it is on ore
         '''
-        # check if already full capacity
-        if self.robot_ores[agent_id][robot_id] == ROBOT_MAX_ORE_CAPACITY:
-            return -amount * REWARD_PER_RESOURCE_WASTED
         
-        # add ore
-        self.robot_ores[agent_id][robot_id] += amount
+        uncapped_amount = amount + self.robot_ores[agent_id][robot_id]
+        capped_amount = min(uncapped_amount, ROBOT_MAX_ORE_CAPACITY)
+        increament = capped_amount - self.robot_ores[agent_id][robot_id]
+        wastage = uncapped_amount - capped_amount
         
-        # check ore capacity
-        if self.robot_ores[agent_id][robot_id] > ROBOT_MAX_ORE_CAPACITY:
-            self.robot_ores[agent_id][robot_id] = ROBOT_MAX_ORE_CAPACITY
-        return (amount - self.robot_ores[agent_id][robot_id]) * REWARD_PER_RESOURCE_TRANSFERRED
+        self.robot_ores[agent_id][robot_id] = capped_amount
+        
+        reward_for_increment = increament * REWARD_PER_RESOURCE_TRANSFERRED
+        reward_for_wastage = wastage * REWARD_PER_RESOURCE_WASTED
+        return reward_for_increment + reward_for_wastage
     
     def _robot_move(self, agent_id, robot_id, robot_action):
         '''
@@ -323,7 +328,7 @@ class GridWorldEnv(MultiAgentEnv):
             self.info['scores'][agent_id] += transferred_resource
             
             # return reward
-            return transferred_resource * REWARD_PER_RESOURCE_TRANSFERRED
+            return transferred_resource * REWARD_PER_SCORE
         
         # pass to robots
         target_robot = np.where(self.robot_positions[agent_id] == new_position)[0][0]
@@ -336,12 +341,14 @@ class GridWorldEnv(MultiAgentEnv):
         
         e.g.
         action={
-            'team_0': [0, 1, 2]
-            'team_1': [2, 1, 5]
+            'team_0_robot_0': 0,
+            'team_0_robot_1': 1,
+            'team_0_robot_2': 2,
+            'team_1_robot_0': 0,
+            'team_1_robot_1': 1,
+            'team_1_robot_2': 2,
         }
         """
-        
-        # convert robot action to player action:
         
         # check game is done
         self.info['time_left'] -= 1
@@ -352,45 +359,55 @@ class GridWorldEnv(MultiAgentEnv):
             '__all__': self.info['time_left'] <= 0,
         }
         
-        reward = self.reward
+        # reward per robot
+        reward={agent_id: 0 for agent_id in self.agents}
         
         # move agents
-        for team in actions:
-            for agent in range(3):
-                agent_action = actions[team][agent]
-                # check if robot is dead
-                if self.robot_positions[team][agent] == 100:
-                    continue
-                
-                # reward per turn
-                reward[team] += REWARD_PER_TURN
-                
-                # stay still
-                if agent_action == 0:
-                    pass
-                
-                # mine
-                if agent_action == 1:
-                    if self._robot_on_ore(team, agent):
-                        reward[team] = self._robot_add_ore(team, agent, ROBOT_ORE_PER_TURN)
-                    else:
-                        # robot is not on ore
-                        reward[team] += REWARD_INVALID_ACTION
-                
-                # move
-                if 2 <= agent_action <=5:
-                    reward[team] = self._robot_move(team, agent, agent_action)
-                        
-                # pass resource
-                if 6 <= agent_action <= 9:
-                    reward[team] = self._robot_pass_resource(team, agent, agent_action)
+        for robot in actions:
+            team = robot[:6]
+            agent = int(robot[-1])
+            
+            agent_action = actions[robot]
+            # check if robot is dead
+            if self.robot_positions[team][agent] == 100:
+                continue
+            
+            # reward per turn
+            reward[robot] = REWARD_PER_TURN
+            
+            # stay still
+            if agent_action == 0:
+                pass
+            
+            # mine
+            if agent_action == 1:
+                if self._robot_on_ore(team, agent):
+                    self._robot_add_ore(team, agent, ROBOT_ORE_PER_TURN)
+                    reward[robot] = REWARD_ORE_COLLECTED
+                else:
+                    # robot is not on ore
+                    reward[robot] = REWARD_INVALID_ACTION
+            
+            # move
+            if 2 <= agent_action <=5:
+                reward[robot] = self._robot_move(team, agent, agent_action)
+                    
+            # pass resource
+            if 6 <= agent_action <= 9:
+                reward[robot] = self._robot_pass_resource(team, agent, agent_action)
         
         
         if truncateds['__all__']:
             if self.info['scores']['team_0'] > self.info['scores']['team_1']:
-                reward['team_0'] += REWARD_SUCCESS
+                for robot in [f'team_0_robot_{i}' for i in range(3)]:
+                    reward[robot] += REWARD_SUCCESS
+                for robot in [f'team_1_robot_{i}' for i in range(3)]:
+                    reward[robot] -= REWARD_SUCCESS
             elif self.info['scores']['team_0'] < self.info['scores']['team_1']:
-                reward['team_1'] += REWARD_SUCCESS
+                for robot in [f'team_1_robot_{i}' for i in range(3)]:
+                    reward[robot] += REWARD_SUCCESS
+                for robot in [f'team_0_robot_{i}' for i in range(3)]:    
+                    reward[robot] -= REWARD_SUCCESS
             # else:
             #     # tie, compare who have more ore
             #     ore_team_0 = np.sum(self.robot_ores['team_0'])
