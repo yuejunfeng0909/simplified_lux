@@ -219,8 +219,8 @@ class GridWorldEnv(MultiAgentEnv):
             fig_1_score.clear()
             fig_2_score.clear()
             fig_grid.matshow(self.history_observation[i], cmap=cmap)
-            fig_1_score.plot(self.scores_history['team_0'][max(0, i-20):i+1])
-            fig_2_score.plot(self.scores_history['team_1'][max(0, i-20):i+1])
+            fig_1_score.plot(self.scores_history['team_0'][max(0, i-200):i+1])
+            fig_2_score.plot(self.scores_history['team_1'][max(0, i-200):i+1])
         
         self.anim = matplotlib.animation.FuncAnimation(
             fig, render_frame, frames=n_frames, interval=1000/framerate
